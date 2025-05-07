@@ -1,0 +1,5 @@
+pynq
+ipython
+marimo
+matplotlib
+pandas
