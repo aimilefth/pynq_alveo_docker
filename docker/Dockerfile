@@ -32,10 +32,11 @@ RUN chmod u+x ${SETUP_DIR_ARG}/${SETUP_FILE_ARG}
 
 # Install python libraries
 RUN python3 -m pip install --upgrade pip
+RUN python3 -m pip install uv
 # Copy requirements.txt to the container
 COPY ../requirements.txt /tmp/requirements.txt
 # Use uv to install Python dependencies
-RUN python3 -m pip install -r /tmp/requirements.txt && rm /tmp/requirements.txt
+RUN uv pip install -r /tmp/requirements.txt --system --no-cache --compile-bytecode && rm /tmp/requirements.txt
 # Marimo config. 
 COPY .marimo.toml /root/
 
