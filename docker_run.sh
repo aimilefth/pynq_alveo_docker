@@ -1,20 +1,5 @@
 #!/bin/bash
 
-# Function to display usage information
-usage() {
-    echo "Usage: $0 [option]"
-    echo "Options:"
-    echo "  slim    Run the slim version of the Docker container."
-    echo "  gpu     Run the GPU-enabled version of the Docker container."
-    echo "  help    Display this help message."
-    exit 1
-}
-
-# Check if help is requested
-if [[ "$1" == "help" ]]; then
-    usage
-fi
-
 # Initialize variables with default values
 IMAGE_TAG="aimilefth/pynq_alveo_docker:coroni"
 # Current working directory
