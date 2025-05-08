@@ -34,6 +34,7 @@ class AlveoRunner:
         bitstream_path: str,
         parameters: AlveoRunnerParameters,
         device: pynq.Device = None,
+        device_bus: Optional[str] = None,
     ) -> None:
         """
         Initializes the Autoencoder model on the FPGA by loading the specified bitstream.
@@ -96,7 +97,36 @@ class AlveoRunner:
         self.timings["allocate_buffers"] = allocate_buffers_end - allocate_buffers_start
         print("Allocated Buffers")
 
-        self.power_scraper = ALVEOPowerScraper("0000:af:00.1", "2.13")
+        # Initialize power_scraper
+        self.power_scraper: Optional[ALVEOPowerScraper] = None
+        self.device_bus = device_bus
+
+        if self.device_bus:
+            print(
+                f"Attempting to initialize ALVEOPowerScraper for device_bus: {self.device_bus}..."
+            )
+            try:
+                # Default XRT version "2.13" is used by ALVEOPowerScraper if not specified
+                self.power_scraper = ALVEOPowerScraper(device_bus=self.device_bus)
+            except ValueError as e:
+                print(f"Warning: Failed to initialize ALVEOPowerScraper. {e}")
+                print("Power scraping will be disabled.")
+                self.power_scraper = None
+            except RuntimeError as e:
+                print(f"Warning: ALVEOPowerScraper encountered a runtime error. {e}")
+                print("Power scraping will be disabled.")
+                self.power_scraper = None
+            except Exception as e:
+                print(
+                    f"Warning: An unexpected error occurred while initializing ALVEOPowerScraper: {e}"
+                )
+                print("Power scraping will be disabled.")
+                self.power_scraper = None
+        else:
+            print(
+                "No device_bus specified for AlveoRunner. Power scraping is disabled."
+            )
+
         print("Succesfully loaded ALVEO model!")
 
     def _allocate_buffers(self) -> None:
@@ -465,6 +495,11 @@ class AlveoRunner:
         Returns:
             List[Dict[str, Any]]: List of dictionaries containing power data collected during the run.
         """
+        if self.power_scraper is None:
+            print(
+                "Power scraping is disabled (AlveoRunner.power_scraper is None). Cannot collect power data."
+            )
+            return []
         event = threading.Event()  # Event for signaling
         power_data_queue = queue.Queue()  # Queue for communication
         continuous_power_data = threading.Thread(

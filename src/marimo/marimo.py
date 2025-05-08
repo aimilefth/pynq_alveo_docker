@@ -44,7 +44,7 @@ def __(devices):
         input_buffer_elements=TIMESTEPS * FEATURES,
         output_buffer_elements=TIMESTEPS * FEATURES,
     )
-    model = AlveoRunner(XCLBIN_PATH, params, device)
+    model = AlveoRunner(XCLBIN_PATH, params, device, "0000:af:00.1")
     return (
         AlveoRunner,
         AlveoRunnerParameters,
