@@ -2,7 +2,7 @@ import pynq
 import numpy as np
 from dataclasses import dataclass
 from pprint import pprint
-from typing import Any, Dict, Type, List
+from typing import Any, Dict, Type, List, Optional, Tuple
 import time
 import inspect
 import threading
@@ -17,11 +17,11 @@ class AlveoRunnerParameters:
     Dataclass to hold parameters for configuring the ML Model.
     """
 
-    kernel_name: str
     input_buffer_elements: int
     output_buffer_elements: int
     input_t: type = float  # Data type for the input.
     result_t: type = float  # Data type for the output.
+    kernel_name: str = None
 
 
 class AlveoRunner:
@@ -64,16 +64,28 @@ class AlveoRunner:
         # self.kernel = self.overlay.lstm_1  # Reference to the Autoencoder kernel on the FPGA
         # Store parameters and set up the kernel and buffers
         self.parameters = parameters
-        # Get default kernel IP (works when only one kernel exists)
-        try:
-            self.kernel = getattr(self.overlay, next(iter(self.overlay.ip_dict)))
-        except Exception as e:
-            raise AssertionError(
-                f"Hmmm  self.kernel = getattr(self.overlay, next(iter(self.overlay.ip_dict))) failed,here is the error {e}\n here is the help {self.help()}\n and the ip_dict {self.get_ip_dict()}"
+        if self.parameters.input_buffer_elements <= 0:
+            raise ValueError(
+                "AlveoRunnerParameters.input_buffer_elements must be positive."
             )
-        # self.in_out_size = self.parameters.N_TS * self.parameters.N_FEATURES
+        if self.parameters.output_buffer_elements < 0:
+            raise ValueError(
+                "AlveoRunnerParameters.output_buffer_elements cannot be negative."
+            )
+        if self.parameters.kernel_name is None:
+            # Get default kernel IP (works when only one kernel exists)
+            try:
+                self.kernel = getattr(self.overlay, next(iter(self.overlay.ip_dict)))
+            except Exception as e:
+                raise AssertionError(
+                    f"Hmmm  self.kernel = getattr(self.overlay, next(iter(self.overlay.ip_dict))) failed,here is the error {e}\n here is the help {self.help()}\n and the ip_dict {self.get_ip_dict()}"
+                )
+        else:
+            self.kernel = getattr(self.overlay, self.parameters.kernel_name)
+
         # self.pprint_ip_dict()  # Print information about available IP cores
         # self.print_kernel_signature()  # Print the kernel's function signature
+
         self.input_buffer = None
         self.output_buffer = None
 
@@ -158,38 +170,103 @@ class AlveoRunner:
         return output_buffer
 
     def run_vector(
-        self, input_vector: np.ndarray, timed: bool = False, verbose: bool = False
+        self,
+        input_vector: np.ndarray,
+        output_shape: Optional[Tuple[int, ...]] = None,
+        timed: bool = False,
+        verbose: bool = False,
     ) -> np.ndarray:
         """
-        Processes an input vector by dividing it into segments and running the autoencoder model on each segment.
+        Processes an input vector by flattening it, dividing it into segments
+        compatible with the model's input buffer size, running the model on each
+        segment, and then optionally reshaping the concatenated results.
 
         Args:
-            input_vector (np.ndarray): The input data array to be processed. This array should be a multiple of the model's
-                input size (`self.parameters.input_buffer_elements`).
-            timed (bool, optional): If True, measures and stores the execution time for each segment. Defaults to False.
-            verbose (bool, optional): If True and `timed` is also True, prints the runtime of each segment's execution.
-                Defaults to False.
+            input_vector (np.ndarray): The input data array. Can be multi-dimensional.
+            output_shape (Optional[Tuple[int, ...]], optional):
+                If provided, the flat output vector will be reshaped to this shape.
+                The total number of elements in output_shape must match the total
+                number of elements in the flat output.
+                If None (default), the flat output vector is returned.
+            timed (bool, optional): If True, measures and prints execution time for
+                                     each segment. Defaults to False.
+            verbose (bool, optional): If True and `timed` is True, prints runtime.
+                                      Defaults to False.
 
         Returns:
-            np.ndarray: The output vector containing the results of the autoencoder model for each input segment.
+            np.ndarray: The processed output data. If output_shape is provided and
+                        valid, it's reshaped; otherwise, it's the flat output vector.
+
+        Raises:
+            ValueError: If input_buffer_elements is not positive, or if output_shape
+                        is provided but its product doesn't match the flat output size.
+            AssertionError: If the total number of elements in the flattened input
+                            is not a multiple of self.parameters.input_buffer_elements.
         """
 
-        output_vector = np.empty(
-            shape=input_vector.shape, dtype=convert_types(self.parameters.result_t)
+        # 1) Reshape the input and flattening it (run inputs must be flattened)
+        input_flat = input_vector.flatten()
+
+        # 2) Check if the len of input vector is a multiple of input_buffer_elements.
+        if len(input_flat) % self.parameters.input_buffer_elements != 0:
+            raise AssertionError(
+                f"Flattened input vector length ({len(input_flat)}) must be a multiple of "
+                f"input_buffer_elements ({self.parameters.input_buffer_elements})."
+            )
+
+        num_segments = len(input_flat) // self.parameters.input_buffer_elements
+
+        # 3) Create the flattened output_vector
+        output_flat_len = num_segments * self.parameters.output_buffer_elements
+        output_vector_flat = np.empty(
+            shape=(output_flat_len,), dtype=convert_types(self.parameters.result_t)
         )
-        for i in range(0, len(input_vector), self.parameters.input_buffer_elements):
+
+        # 4) Do the running of each individual vector using the run or timed_run function
+        for i in range(num_segments):
+            input_segment_start = i * self.parameters.input_buffer_elements
+            input_segment_end = (
+                input_segment_start + self.parameters.input_buffer_elements
+            )
+            current_input_segment = input_flat[input_segment_start:input_segment_end]
+
+            # The run/timed_run methods expect input of shape (self.parameters.input_buffer_elements,)
+            # and self.input_buffer is already allocated with this shape.
+
             if timed:
-                output_vector[i : i + self.parameters.input_buffer_elements] = (
-                    self.timed_run(
-                        input_vector[i : i + self.parameters.input_buffer_elements],
-                        verbose,
-                    )
-                )
+                segment_result = self.timed_run(current_input_segment, verbose)
             else:
-                output_vector[i : i + self.parameters.input_buffer_elements] = self.run(
-                    input_vector[i : i + self.parameters.input_buffer_elements]
+                segment_result = self.run(current_input_segment)
+
+            output_segment_start = i * self.parameters.output_buffer_elements
+            output_segment_end = (
+                output_segment_start + self.parameters.output_buffer_elements
+            )
+            output_vector_flat[output_segment_start:output_segment_end] = segment_result
+
+        # 5) Reshape the output_vector if output_shape is provided
+        if output_shape is not None:
+            if not isinstance(output_shape, tuple):
+                raise TypeError(
+                    f"output_shape must be a tuple, but got {type(output_shape)}."
                 )
-        return output_vector
+
+            expected_total_elements = np.prod(output_shape)
+            if expected_total_elements != output_vector_flat.size:
+                raise ValueError(
+                    f"The total number of elements in the provided output_shape {output_shape} "
+                    f"(product: {expected_total_elements}) does not match the size of the "
+                    f"flat output vector ({output_vector_flat.size})."
+                )
+            try:
+                return output_vector_flat.reshape(output_shape)
+            except ValueError as e:  # Catch potential reshape errors from numpy
+                raise ValueError(
+                    f"Failed to reshape flat output to {output_shape}. Numpy error: {e}"
+                )
+        else:
+            # Return the flat output by default
+            return output_vector_flat
 
     def print_timings(self, verbose=False) -> None:
         """
@@ -276,6 +353,46 @@ class AlveoRunner:
         del self.output_buffer  # Deletes the output buffer from memory
         self.overlay.free()  # Frees the overlay resources
 
+    def get_average_time_alveo(
+        self, input_vector: np.ndarray, iterations: int = 1000, warmup: int = 10
+    ) -> float:
+        total_time = 0
+        # Copy input data to the FPGA buffer and sync it
+        self.input_buffer[:] = input_vector
+        self.input_buffer.sync_to_device()
+        for _ in range(warmup):
+            _ = self.kernel.call(self.input_buffer, self.output_buffer)
+        # self.output_buffer.sync_from_device()
+        for i in range(iterations):
+            start = time.perf_counter()
+            _ = self.kernel.call(self.input_buffer, self.output_buffer)
+            # self.output_buffer.sync_from_device()
+            end = time.perf_counter()
+            total_time += end - start
+        average_time_ms = total_time / iterations * 1000  # (ms)
+        return average_time_ms
+
+    def get_average_time_alveo_transfers(
+        self, input_vector: np.ndarray, iterations: int = 1000, warmup: int = 10
+    ) -> float:
+        total_time = 0
+        # Copy input data to the FPGA buffer and sync it
+        self.input_buffer[:] = input_vector
+        self.input_buffer.sync_to_device()
+        for _ in range(warmup):
+            _ = self.kernel.call(self.input_buffer, self.output_buffer)
+        self.output_buffer.sync_from_device()
+        for i in range(iterations):
+            start = time.perf_counter()
+            # _ = self.run(input_vector) This includes host -> buffer copies, slow
+            self.input_buffer.sync_to_device()
+            _ = self.kernel.call(self.input_buffer, self.output_buffer)
+            self.output_buffer.sync_from_device()
+            end = time.perf_counter()
+            total_time += end - start
+        average_time_ms = total_time / iterations * 1000  # (ms)
+        return average_time_ms
+
     def _collect_power_data_thread(
         self,
         event: threading.Event,
@@ -356,11 +473,11 @@ class AlveoRunner:
         )
         if transfers:
             continuous_runs = threading.Thread(
-                target=self._continuous_runs_thread, args=(event,)
+                target=self._continuous_runs_transfers_thread, args=(event,)
             )
         else:
             continuous_runs = threading.Thread(
-                target=self._continuous_runs_transfers_thread, args=(event,)
+                target=self._continuous_runs_thread, args=(event,)
             )
         continuous_runs.start()
         continuous_power_data.start()

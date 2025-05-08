@@ -33,25 +33,49 @@ def __(mo):
 
 
 @app.cell
-def __():
+def __(devices):
     from src.alveo_runner import AlveoRunner, AlveoRunnerParameters, convert_types
 
-    return AlveoRunner, AlveoRunnerParameters, convert_types
-
-
-@app.cell
-def __(AlveoRunner, AlveoRunnerParameters, devices):
     XCLBIN_PATH = "/app/mounted_dir/attention_ae.xclbin"
     device = devices[0]
     TIMESTEPS = 12
     FEATURES = 8
     params = AlveoRunnerParameters(
-        kernel_name="attention_ae_1",
         input_buffer_elements=TIMESTEPS * FEATURES,
         output_buffer_elements=TIMESTEPS * FEATURES,
     )
     model = AlveoRunner(XCLBIN_PATH, params, device)
-    return FEATURES, TIMESTEPS, XCLBIN_PATH, device, model, params
+    return (
+        AlveoRunner,
+        AlveoRunnerParameters,
+        FEATURES,
+        TIMESTEPS,
+        XCLBIN_PATH,
+        convert_types,
+        device,
+        model,
+        params,
+    )
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""## Example Run""")
+    return
+
+
+@app.cell
+def __(convert_types, model, np):
+    ones_vector = np.ones((model.parameters.input_buffer_elements,)).astype(
+        convert_types(model.parameters.input_t)
+    )
+    out_vector = model.run(ones_vector)
+    print(out_vector)
+
+    twos_vector = ones_vector * 2
+    out_twos_vector = model.timed_run(twos_vector)
+    print(out_twos_vector)
+    return ones_vector, out_twos_vector, out_vector, twos_vector
 
 
 @app.cell
@@ -62,25 +86,14 @@ def __(mo):
 
 @app.cell
 def __(convert_types, model, np):
-    from src.alveo_latency_benchmarks import (
-        get_average_time_alveo,
-        get_average_time_alveo_transfers,
-    )
-
     input_vector = np.random.random((model.parameters.input_buffer_elements,)).astype(
         convert_types(model.parameters.input_t)
     )
-    average_time = get_average_time_alveo(model, input_vector, 1000)
+    average_time = model.get_average_time_alveo(input_vector, 1000)
     print(f"Average run: {average_time:.2f} ms")
-    average_time_transfers = get_average_time_alveo_transfers(model, input_vector, 1000)
+    average_time_transfers = model.get_average_time_alveo_transfers(input_vector, 1000)
     print(f"Average run with data transfers: {average_time_transfers:.2f} ms")
-    return (
-        average_time,
-        average_time_transfers,
-        get_average_time_alveo,
-        get_average_time_alveo_transfers,
-        input_vector,
-    )
+    return average_time, average_time_transfers, input_vector
 
 
 @app.cell

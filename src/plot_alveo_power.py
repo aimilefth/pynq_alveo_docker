@@ -1,9 +1,6 @@
 import pandas as pd
-from datetime import datetime
 import matplotlib.pyplot as plt
 from typing import Any, Dict, List
-
-LEGACY_THRESHOLD_VERSION = (2, 13)
 
 
 def extract_alveo_power_data(
@@ -20,13 +17,7 @@ def extract_alveo_power_data(
         pd.DataFrame: A sorted DataFrame containing 'timestamp', 'Power', '12 Volts Auxillary Power',
                       '12 Volts PCI Express Power', and 'Internal FPGA Vcc Power' for each entry.
     """
-    try:
-        # Parse "2.13" into (2, 13) for comparison
-        xrt_version_tuple: Tuple[int, ...] = tuple(map(int, xrt_version.split(".")))
-    except ValueError:
-        raise ValueError(
-            f"xrt_version '{xrt_version}' is not in a valid format like '2.13' or '2.14.1'"
-        )
+
     extracted_data = []
     for entry in data:
         # Convert time into a timestamp
